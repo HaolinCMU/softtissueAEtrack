@@ -18,6 +18,68 @@ import torch.nn as nn
 import torch.utils.data
 
 
+# class Net1(nn.Module):
+#     """
+#     MLP modeling hyperparams:
+#     ----------
+#         Input: FM_num (FMs' displacements). 
+#         Hidden layers: Default architecture: 128 x 64 (From Haolin and Houriyeh). Optimization available. 
+#         Output: PC_num (weights generated from deformation's PCA). 
+#     """
+    
+#     def __init__(self, FM_num, PC_num):
+#         """
+#         Parameters:
+#         ----------
+#             FM_num: Int. 
+#                 The number of fiducial markers. 
+#             PC_num: Int. 
+#                 The number of picked principal compoments. 
+#         """
+        
+#         super(Net1, self).__init__()
+#         self.FM_num = FM_num
+#         self.PC_num = PC_num
+#         self.hidden_1 = nn.Sequential(
+#             nn.Linear(int(self.FM_num*3), 128),
+#             nn.ReLU(),
+#             # nn.Dropout(0.5)
+#         )
+#         self.hidden_2 = nn.Sequential(
+#             nn.Linear(128, 64),
+#             nn.ReLU(),
+#             # nn.Dropout(0.5)
+#         )
+#         # self.hidden_3 = nn.Sequential(
+#         #     nn.Linear(64, 32),
+#         #     nn.ReLU(),
+#         #     # nn.Dropout(0.5)
+#         # )
+#         self.out_layer = nn.Linear(64, self.PC_num)
+        
+        
+#     def forward(self, x):
+#         """
+#         Forward mapping: FM displacements -> Principal weights. 
+
+#         Parameters:
+#         ----------
+#             x: 2D Array. 
+#                 Matrix of FM displacements of all DOFs. 
+
+#         Returns:
+#         ----------
+#             output: 2D Array. 
+#                 Matrix of principal weights. 
+#         """
+        
+#         f1 = self.hidden_1(x)
+#         f2 = self.hidden_2(f1)
+#         # f3 = self.hidden_3(f2)
+#         output = self.out_layer(f2)
+#         return output
+
+
 class Net1(nn.Module):
     """
     MLP modeling hyperparams:
@@ -41,21 +103,21 @@ class Net1(nn.Module):
         self.FM_num = FM_num
         self.PC_num = PC_num
         self.hidden_1 = nn.Sequential(
-            nn.Linear(int(self.FM_num*3), 128),
-            nn.ReLU(),
+            nn.Linear(int(self.FM_num*3), 1024),
+            nn.LeakyReLU(),
             # nn.Dropout(0.5)
         )
         self.hidden_2 = nn.Sequential(
-            nn.Linear(128, 64),
-            nn.ReLU(),
+            nn.Linear(1024, 512),
+            nn.LeakyReLU(),
             # nn.Dropout(0.5)
         )
-        # self.hidden_3 = nn.Sequential(
-        #     nn.Linear(64, 32),
-        #     nn.ReLU(),
-        #     # nn.Dropout(0.5)
-        # )
-        self.out_layer = nn.Linear(64, self.PC_num)
+        self.hidden_3 = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.LeakyReLU(),
+            # nn.Dropout(0.5)
+        )
+        self.out_layer = nn.Linear(256, self.PC_num)
         
         
     def forward(self, x):
@@ -75,8 +137,8 @@ class Net1(nn.Module):
         
         f1 = self.hidden_1(x)
         f2 = self.hidden_2(f1)
-        # f3 = self.hidden_3(f2)
-        output = self.out_layer(f2)
+        f3 = self.hidden_3(f2)
+        output = self.out_layer(f3)
         return output
 
 
@@ -598,7 +660,7 @@ def dataProcessing(data_x, data_y, batch_size, training_ratio, validation_ratio,
     test_x = torch.from_numpy(data_x[:,validation_index:]).float() # size: 15 x nTest
     test_y = torch.from_numpy(data_y[:,validation_index:]).float() # size: 20 x nTest
     
-    # Generate dataloaders
+    # Generate dataloaders 
     # Make sure the sample dimension is on axis-0. 
     train_dataset = torch.utils.data.TensorDataset(np.transpose(train_x), 
                                                    np.transpose(train_y))
@@ -802,8 +864,8 @@ def main():
 
     Preparations:
     ----------
-        1. Run `nonlinearCasesCreation.py` to generate model input files for Abaqus and the file "training_parameters_transfer.mat" in the working directory;
-        2. Run nonlinear FEA on Abaqus (Run script -> run.py), and run data_extraction.m to generate result coordinates (saved in .csv files) after deformation.
+        1. Run `nonlinearCasesCreation.py` to generate model input files for ansys and the file "training_parameters_transfer.mat" in the working directory;
+        2. Run nonlinear FEA on ansys (Run script -> run.py), and run data_extraction.m to generate result coordinates (saved in .csv files) after deformation.
     
     Pipeline:
     ----------
@@ -842,7 +904,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     batch_size = 128
     learning_rate = 0.001
-    num_epochs = 12000 # Default: TBD. Previous default: 4000.  
+    num_epochs = 4000 # Default: TBD. Previous default: 4000.  
     training_ratio = 0.8
     validation_ratio = 0.1
     FM_num = 5
@@ -908,8 +970,8 @@ def main():
     # Forward training & validation
     start_time = time.time()
     neural_net, lossList_train, lossList_valid = trainValidateNet(train_dataloader, valid_dataloader, 
-                                                                  neural_net, learning_rate, num_epochs, 
-                                                                  ANN_folder_path, device)
+                                                                    neural_net, learning_rate, num_epochs, 
+                                                                    ANN_folder_path, device)
     end_time = time.time()
     elapsed_time = end_time - start_time # Elapsed time for training. 
 
