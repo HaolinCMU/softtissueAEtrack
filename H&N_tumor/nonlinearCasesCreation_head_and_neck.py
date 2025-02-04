@@ -15,7 +15,7 @@ import scipy.io # For extracting data from .mat file
 
 class inputFileGenerator(object):
     """
-    Generate input file for Abaqus. 
+    Generate input file for ansys. 
 
     Unit system: 
         Length: m
@@ -23,8 +23,7 @@ class inputFileGenerator(object):
         Pressure: Pa
     """
 
-    def __init__(self, data_file_name, write_path, material_type, fix_indices_list, 
-                 node_variable_name, elem_variable_name, user_prescribed_force_field=[]):
+    def __init__(self, data_file_name, write_path, material_type, fix_indices_list, node_variable_name, elem_variable_name, user_prescribed_force_field=[]):
         """
         Initialize parameters. 
 
@@ -599,10 +598,10 @@ class inputFileGenerator(object):
         Returns:
         ----------
         The list collection of all sub-definition lists, including:
-            assembly_initial: Header of the assembly definition. 
+            assenbly_initial: Header of the assembly definition. 
             instance: The instance definition. 
             nset_boundary: The definition of BC related node set. 
-            asssembly_end: The endline of assembly definition. 
+            asssenbly_end: The endline of assembly definition. 
         """
 
         # Generate "self.loads_num" nsets, each of which has 1 node. 
@@ -1069,7 +1068,7 @@ def saveLog(file_name_list, elapsed_time_list, write_status, data_file_name,
 
 
 def main():
-    abaqus_default_directory = "C:/temp" # Default working directory of Abaqus. 
+    ansys_default_directory = "C:/temp" # Default working directory of ansys. 
     inp_folder = "inp_files"
     sample_nums = 2000
     data_file_path = "data_head_and_neck.mat"
@@ -1103,7 +1102,7 @@ def main():
         sample_nums = force_fields.shape[1]
 
 
-    # Generate input file for Abaqus. 
+    # Generate input file for ansys. 
     file_name_list, elapsed_time_list, force_field_matrix = [], [], None
 
     for i in range(sample_nums):
@@ -1177,9 +1176,9 @@ def main():
 
     scipy.io.savemat("training_parameters_transfer.mat", mdict)
     
-    # np.save(os.path.join(abaqus_default_directory, "training_parameters_transfer.npy"), mdict, fix_imports=True)
+    # np.save(os.path.join(ansys_default_directory, "training_parameters_transfer.npy"), mdict, fix_imports=True)
 
-    # np.savez(os.path.join(abaqus_default_directory, "training_parameters_transfer.npz"), 
+    # np.savez(os.path.join(ansys_default_directory, "training_parameters_transfer.npz"), 
     #          fix_indices_list=fix_indices_list,
     #          orig_data_file_name=data_file_path,
     #          orig_config_var_name=node_variable_name,
