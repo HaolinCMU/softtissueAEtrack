@@ -802,8 +802,8 @@ def main():
 
     Preparations:
     ----------
-        1. Run `nonlinearCasesCreation.py` to generate model input files for Abaqus and the file "training_parameters_transfer.mat" in the working directory;
-        2. Run nonlinear FEA on Abaqus (Run script -> run.py), and run data_extraction.m to generate result coordinates (saved in .csv files) after deformation.
+        1. Run `nonlinearCasesCreation.py` to generate model input files for ansys and the file "training_parameters_transfer.mat" in the working directory;
+        2. Run nonlinear FEA on ansys (Run script -> run.py), and run data_extraction.m to generate result coordinates (saved in .csv files) after deformation.
     
     Pipeline:
     ----------
@@ -840,7 +840,7 @@ def main():
 
     # ********************************** INITIALIZE PARAMETERS ********************************** #
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 128
+    batch_size = 256
     learning_rate = 0.001
     num_epochs = 12000 # Default: TBD. Previous default: 4000.  
     training_ratio = 0.8
