@@ -952,8 +952,8 @@ def main():
 
     Preparations:
     ----------
-        1. Run `nonlinearCasesCreation.py` to generate model input files for Abaqus and the file "training_parameters_transfer.mat" in the working directory;
-        2. Run nonlinear FEA on Abaqus (Run script -> run.py), and run data_extraction.m to generate result coordinates (saved in .csv files) after deformation.
+        1. Run `nonlinearCasesCreation.py` to generate model input files for ansys and the file "training_parameters_transfer.mat" in the working directory;
+        2. Run nonlinear FEA on ansys (Run script -> run.py), and run data_extraction.m to generate result coordinates (saved in .csv files) after deformation.
     
     Pipeline:
     ----------
@@ -1325,5 +1325,5 @@ if __name__ == "__main__":
     neural_net, data_mat, transfer_data_mat, result_mat_file_name = main()
 
     # Test on the specified external unseen dataset.
-    test(neural_net, data_mat, transfer_data_mat, result_mat_file_name, testset_TOKEN="interpolated")
+    # test(neural_net, data_mat, transfer_data_mat, result_mat_file_name, testset_TOKEN="interpolated")
 
