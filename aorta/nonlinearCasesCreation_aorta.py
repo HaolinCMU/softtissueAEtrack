@@ -16,7 +16,7 @@ import scipy.io # For extracting data from .mat file
 
 class inputFileGenerator(object):
     """
-    Generate input file for Abaqus. 
+    Generate input file for ansys. 
 
     Unit system: 
         Length: m
@@ -65,7 +65,7 @@ class inputFileGenerator(object):
         self._inputFile_lines_total = []
         self.writePath = write_path
 
-        self._modulus = 1e7 # Young's modulus. Unit: Pa. Default: 1e7. 
+        self._modulus = 250e3 # Young's modulus. Unit: Pa. Default: 1e7. 
         self._poisson_ratio = 0.48 # Poisson's ratio. Linear elastic default: 0.3; neo-Hookean default: 0.48.  
 
         self._isCoupleOn = False # Boolean. True: use coupling constraint; False: do not use coupling constraint. Must not turn on if applying Laplacian smoothing.  
@@ -79,8 +79,8 @@ class inputFileGenerator(object):
         self._smoothing_rate = 0.1 # Default: 0.1 (Previous: 1e-4). 
 
         self.loads_num = 3 # For initial testing.
-        self._load_sampling_style = "gaussian" # String. Indicating the type of random sampling for force components. "uniform" / "gaussian". 
-        self._load_scale = (0.0, 10.0) # Absolute range of the force for uniform sampling. Case and BC specific. (min, max). Unit: N.
+        self._load_sampling_style = "uniform" # String. Indicating the type of random sampling for force components. "uniform" / "gaussian". 
+        self._load_scale = (0.0, 0.3) # Absolute range of the force for uniform sampling. Case and BC specific. (min, max). Unit: N.
         self._gaussian_params = (4.0, 0.8) # Mean and deviation of the force for Gaussian sampling. Case and BC specific. (mean, deviation). Unit: N.
         self._load_params_tuple = None
         self._initial_force_component_vector = [] # List of floats. Default: []. Example: [5., 5., 5.]. 
@@ -1146,9 +1146,9 @@ def saveLog(file_name_list, elapsed_time_list, write_status, data_file_name,
 
 
 def main():
-    abaqus_default_directory = "C:/temp" # Default working directory of Abaqus. 
+    ansys_default_directory = "C:/temp" # Default working directory of ansys. 
     inp_folder = "inp_files"
-    sample_nums = 1500
+    sample_nums = 20
     data_file_path = "data_aorta.mat"
     node_variable_name, elem_variable_name = "NodeI", "EleI"
     results_folder_path_stress, results_folder_path_coor = "stress", "coor"
@@ -1159,7 +1159,7 @@ def main():
     # ================================== Force interpolation related variables ================================== #
     force_field_mat_name = "force_field_data.mat"
     force_interpolation_folder = "inp_interpolation"
-    isPrescribedForceOn = True # Boolean indicator. True: use prescribed force field; False: no specified force field. Default: False. 
+    isPrescribedForceOn = False # Boolean indicator. True: use prescribed force field; False: no specified force field. Default: False. 
     force_type = "random" # String. The type of prescribed force field. "interpolated": interpolated force fields; "random": weighted-summed force fields. 
     eigen_num_force, force_scalar = 20, 0.4 # Float. The scalar of force fields controlling the force magnitude -> deformation magnitude of the tumor in nonlinear solver. Unit: N. 
     # =========================================================================================================== #
@@ -1180,7 +1180,7 @@ def main():
         sample_nums = force_fields.shape[1]
 
 
-    # Generate input file for Abaqus. 
+    # Generate input file for ansys. 
     file_name_list, elapsed_time_list, force_field_matrix = [], [], None
 
     for i in range(sample_nums):
@@ -1254,9 +1254,9 @@ def main():
 
     scipy.io.savemat("training_parameters_transfer.mat", mdict)
     
-    # np.save(os.path.join(abaqus_default_directory, "training_parameters_transfer.npy"), mdict, fix_imports=True)
+    # np.save(os.path.join(ansys_default_directory, "training_parameters_transfer.npy"), mdict, fix_imports=True)
 
-    # np.savez(os.path.join(abaqus_default_directory, "training_parameters_transfer.npz"), 
+    # np.savez(os.path.join(ansys_default_directory, "training_parameters_transfer.npz"), 
     #          fix_indices_list=fix_indices_list,
     #          orig_data_file_name=data_file_path,
     #          orig_config_var_name=node_variable_name,
