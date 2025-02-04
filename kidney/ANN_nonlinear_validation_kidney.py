@@ -17,6 +17,14 @@ import torch
 import torch.nn as nn
 import torch.utils.data
 
+from torchvision.transforms import Compose, Resize, ToTensor
+
+from model import *
+from PARAM import *
+
+from dataset import * 
+from training import *
+
 
 class Net1(nn.Module):
     """
@@ -41,22 +49,22 @@ class Net1(nn.Module):
         self.FM_num = FM_num
         self.PC_num = PC_num
         self.hidden_1 = nn.Sequential(
-            nn.Linear(int(self.FM_num*3), 128),
-            nn.ReLU(),
+            nn.Linear(int(self.FM_num*3), 1024),
+            nn.LeakyReLU(),
             # nn.Dropout(0.5)
         )
         self.hidden_2 = nn.Sequential(
-            nn.Linear(128, 64),
-            nn.ReLU(),
+            nn.Linear(1024, 512),
+            nn.LeakyReLU(),
             # nn.Dropout(0.5)
         )
-        # self.hidden_3 = nn.Sequential(
-        #     nn.Linear(256, 128),
-        #     nn.ReLU(),
-        #     # nn.Dropout(0.5)
-        # )
-        self.out_layer = nn.Linear(64, self.PC_num)
-        
+        self.hidden_3 = nn.Sequential(
+            nn.Linear(512, 256),
+            nn.LeakyReLU(),
+            # nn.Dropout(0.5)
+        )
+        self.out_layer = nn.Linear(256, self.PC_num)
+    
     def forward(self, x):
         """
         Forward mapping: FM displacements -> Principal weights. 
@@ -74,8 +82,8 @@ class Net1(nn.Module):
         
         f1 = self.hidden_1(x)
         f2 = self.hidden_2(f1)
-        # f3 = self.hidden_3(f2)
-        output = self.out_layer(f2)
+        f3 = self.hidden_3(f2)
+        output = self.out_layer(f3)
         return output
 
 
@@ -426,6 +434,43 @@ def dataReconstruction(eigVect, eigVal, weights, mean_vect, nDOF, non_zero_indic
     return np.real(data_reconstruct)
 
 
+def data_encoding_Autoencoder(encoder_model, data_matrix_shrinked, 
+                              device, dtype=torch.float, transform=Compose([ToTensor()])):
+    """
+    """
+    
+    encoder_model.eval()
+    with torch.no_grad():
+        for i in range(data_matrix_shrinked.shape[1]):
+            input_data_temp = transform(data_matrix_shrinked[:,i].reshape(1,-1)).to(dtype).to(device)
+            _, _, _, latent_temp = encoder_model(input_data_temp)
+            
+            if i == 0: weights_test = latent_temp.cpu().data.numpy().astype(float).reshape(-1,1)
+            else: weights_test = np.hstack((weights_test, latent_temp.cpu().data.numpy().astype(float).reshape(-1,1)))
+    
+    return weights_test
+
+
+def dataReconstruction_Autoencoder(encoder_model, latent, nDOF, non_zero_indices_list, 
+                                   device, dtype=torch.float, transform=Compose([ToTensor()])):
+    """
+    latent: 1d. 
+    """
+    
+    # Transform weights back to original vector space (decoding). 
+    encoder_model.eval()
+    with torch.no_grad():
+        data_temp = encoder_model.decoder(transform(latent.reshape(1,-1)).to(dtype).to(device))
+
+    data_temp = data_temp.cpu().data.numpy().astype(float).reshape(-1,1)
+    data_reconstruct = np.zeros(shape=(nDOF, data_temp.shape[1]), dtype=complex)
+
+    for i, index in enumerate(non_zero_indices_list):
+        data_reconstruct[index,:] = data_temp[i,:]
+    
+    return np.real(data_reconstruct)
+
+
 def greedyClustering(v_space, initial_pt_index, k, style):
     """
     Generate `k` centers, starting with the `initial_pt_index`.
@@ -648,15 +693,16 @@ def dataProcessing(data_x, data_y, batch_size, training_ratio, validation_ratio,
     train_dataloader = torch.utils.data.DataLoader(
         dataset=train_dataset,
         batch_size=batch_size,
-        shuffle=True
+        shuffle=False
     )
     valid_dataloader = torch.utils.data.DataLoader(
         dataset=valid_dataset,
         batch_size=batch_size,
-        shuffle=True
+        shuffle=False
     )
     test_dataloader = torch.utils.data.DataLoader(
-        dataset=test_dataset
+        dataset=test_dataset,
+        shuffle=False
     )
     
     return train_dataloader, valid_dataloader, test_dataloader, norm_params
@@ -758,7 +804,8 @@ def trainValidateNet(train_dataloader, valid_dataloader, neural_net, learning_ra
         
         # Training
         iteration_num_train = 0
-        for iteration, (displacements, weights) in enumerate(train_dataloader):
+        neural_net.train()
+        for _, (displacements, weights) in enumerate(train_dataloader):
             # Forward fitting
             x_train_batch = torch.autograd.Variable(displacements)
             y_train_batch = torch.autograd.Variable(weights)
@@ -779,23 +826,25 @@ def trainValidateNet(train_dataloader, valid_dataloader, neural_net, learning_ra
         
         # Validation
         iteration_num_valid = 0
-        for iteration, (displacements, weights) in enumerate(valid_dataloader):
-            x_valid_batch = torch.autograd.Variable(displacements)
-            y_valid_batch = torch.autograd.Variable(weights)
-            x_valid_batch = x_valid_batch.to(device)
-            y_valid_batch = y_valid_batch.to(device)
-            output = neural_net(x_valid_batch)
-            loss_valid_temp = criterion(output, y_valid_batch)
+        neural_net.eval()
+        with torch.no_grad():
+            for _, (displacements, weights) in enumerate(valid_dataloader):
+                x_valid_batch = torch.autograd.Variable(displacements)
+                y_valid_batch = torch.autograd.Variable(weights)
+                x_valid_batch = x_valid_batch.to(device)
+                y_valid_batch = y_valid_batch.to(device)
+                output = neural_net(x_valid_batch)
+                loss_valid_temp = criterion(output, y_valid_batch)
 
-            loss_sum_valid += loss_valid_temp.cpu().data.numpy()
-            iteration_num_valid += 1
+                loss_sum_valid += loss_valid_temp.cpu().data.numpy()
+                iteration_num_valid += 1
         
         lossList_valid.append(loss_sum_valid/iteration_num_valid)
 
         print("Epoch: ", epoch, "| train loss: %.8f | valid loss: %.8f  " 
               % (loss_sum_train/iteration_num_train, loss_sum_valid/iteration_num_valid))
         
-        if (epoch+1) % 100 == 0:
+        if (epoch+1) % 1000 == 0:
             ANN_savePath_temp = os.path.join(neural_net_folderPath, 
                                              "ANN_" + str(int((epoch+1)/100)) + ".pkl")
             torch.save(neural_net, ANN_savePath_temp) # Save the model every 100 epochs. 
@@ -829,20 +878,36 @@ def testNet(test_dataloader, neural_net, device):
     loss = nn.MSELoss()
     pred_y_List, test_y_List, lossList_test = [], [], [] # List of predicted vector, test_y and loss of each sample. 
     
-    for (displacements, weights) in test_dataloader:
-        x_sample = torch.autograd.Variable(displacements)
-        x_sample = x_sample.to(device)
-        weights = weights.to(device)
-        pred_y = neural_net(x_sample)
-        pred_y_List.append(np.array(pred_y.cpu().data.numpy()).astype(float).reshape(-1,1))
-        test_y_List.append(np.array(weights.cpu().data.numpy()).astype(float).reshape(-1,1))
-        loss_test_temp = loss(pred_y, weights)
-        lossList_test.append(loss_test_temp.cpu().data.numpy())
+    neural_net.eval()
+    with torch.no_grad():
+        for (displacements, weights) in test_dataloader:
+            x_sample = torch.autograd.Variable(displacements)
+            batch_size_temp = x_sample.size(0)
+            x_sample = x_sample.to(device)
+            weights = weights.to(device)
+            pred_y = neural_net(x_sample)
+            loss_test_temp = loss(pred_y, weights)
+
+            pred_y_List += [np.array(pred_y.cpu().data.numpy()[i,:]).astype(float).reshape(-1,1) for i in range(batch_size_temp)]
+            test_y_List += [np.array(weights.cpu().data.numpy()[i,:]).astype(float).reshape(-1,1) for i in range(batch_size_temp)]
+            lossList_test.append(loss_test_temp.cpu().data.numpy())
+            
+        # for (displacements, weights) in test_dataloader:
+        #     x_sample = torch.autograd.Variable(displacements)
+        #     x_sample = x_sample.to(device)
+        #     weights = weights.to(device)
+        #     pred_y = neural_net(x_sample)
+            
+        #     pred_y_List.append(np.array(pred_y.cpu().data.numpy()).astype(float).reshape(-1,1))
+        #     test_y_List.append(np.array(weights.cpu().data.numpy()).astype(float).reshape(-1,1))
+        #     loss_test_temp = loss(pred_y, weights)
+        #     lossList_test.append(loss_test_temp.cpu().data.numpy())
     
     return pred_y_List, test_y_List, lossList_test
 
 
-def deformationExtraction(orig_data_file_name, variable_name, original_node_number, loads_num, results_folder_path):
+def deformationExtraction(orig_data_file_name, variable_name, original_node_number, loads_num, results_folder_path,
+                          deformation_scalar=1.):
     """
     Extract deformation information from original configuration (.mat file) and deformed configuration (.csv file). 
 
@@ -867,8 +932,7 @@ def deformationExtraction(orig_data_file_name, variable_name, original_node_numb
     """
 
     data_mat_temp = scipy.io.loadmat(orig_data_file_name)
-    orig_config_temp = data_mat_temp[variable_name] # Float matrix. Extract the node-coord data of the original configuration. 
-    orig_config_temp = orig_config_temp.astype(float).reshape(-1,1) # Size: node_num*3 x 1. Concatenated as xyzxyz...
+    orig_config_temp = data_mat_temp[variable_name].astype(float).reshape(-1,1) # Float matrix. Size: node_num*3 x 1. Concatenated as xyzxyz.... Extract the node-coord data of the original configuration. 1158 * 3. 
 
     deformed_config_file_list = [file for file in os.listdir(results_folder_path) if not os.path.isdir(file) and file.split('.')[-1] == "csv"]
     data_x = None
@@ -887,7 +951,7 @@ def deformationExtraction(orig_data_file_name, variable_name, original_node_numb
         if index == 0: data_x = copy.deepcopy(x_temp)
         else: data_x = np.hstack((data_x, copy.deepcopy(x_temp)))
     
-    return data_x
+    return data_x*deformation_scalar
 
 
 def deformationExtraction_externalTesting(data_mat, variable_name, original_node_number, loads_num, results_folder_path, alpha_indexing_vector=[]):
@@ -990,19 +1054,25 @@ def main():
 
     # ********************************** INITIALIZE PARAMETERS ********************************** #
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size = 128 # Default: 20. 
-    learning_rate = 0.0001 # Default: 0.001. 
+    batch_size = 256 # Default: 20. 
+    learning_rate = 1e-4 # Default: 0.001. 
     num_epochs = 12000 # Default: TBD. Previous default: 4000.  
     training_ratio = 0.8
     validation_ratio = 0.1
     FM_num = 5 # Default: 5. Maximum: k. 
-    PC_num = 15 # Optimal. (Default: 15. From Dan 09/02). 
+    PC_num = ML_VAE.LATENT_DIM # Optimal. (Default: 15. From Dan 09/02). 
     isNormOn = False # True/Flase: Normalization on/off.
     isPCNormOn = False # # True/Flase: Eigenvector normalization on/off.
     ANN_folder_path = "ANN_model" # The directory of trained ANN models. 
     figure_folder_path = "figure" # The directory of figure folder. 
     isKCenter = True # True/Flase: Y/N for implementing optimized k-center. 
+    deformation_scalar = 100. # Coefficient that scales the deformation data globally. Default: 1. 
 
+    FRAME_CODER_MODEL_TYPE = 'VAE' # 'VAE' or 'Pretrained'. 
+    PRETRAINED_ENCODER_MODEL_PATH = "result/final/1/model_checkpoints_autoencoder/model_final.pth" # Only for 'Pretrained' mode. 
+    SAVED_GT_LIST = "result/final/1/groundtruths_list.npy" # Only for 'Pretrained' mode. 
+    SAVED_LATENT_LIST = "result/final/1/latent_list.npy" # Only for 'Pretrained' mode. 
+    
     if not os.path.isdir(ANN_folder_path): os.mkdir(ANN_folder_path)
     if not os.path.isdir(figure_folder_path): os.mkdir(figure_folder_path)
 
@@ -1020,19 +1090,99 @@ def main():
                                    transfer_data_mat["orig_config_var_name"][0], 
                                    original_node_number, loads_num, 
                                    os.path.join(transfer_data_mat["inp_folder"][0], 
-                                                transfer_data_mat["results_folder_path_coor"][0])) # change the variable's name if necessary. 
+                                                transfer_data_mat["results_folder_path_coor"][0]),
+                                   deformation_scalar=deformation_scalar) # change the variable's name if necessary. 
 
     # Implement PCA
     orig_node_num = int(data_x.shape[0] / 3.0)
-    data_x, nDOF, non_zero_indices_list = matrixShrink(data_x, fix_indices_list) # Remove zero rows of data_x.
-    data_x, mean_vect = zeroMean(data_x, training_ratio) # Shift(zero) the data to its mean. 
-    eigVect_full, eigVal_full, eigVect, eigVal, data_y = PCA(data_x, PC_num, training_ratio, bool_PC_norm=isPCNormOn) # PCA on training deformation matrix. 
+    data_x, nDOF, non_zero_indices_list = matrixShrink(data_x, fix_indices_list) # Remove zero rows of data_x. Exact order. 
+    data_x_PCA, mean_vect = zeroMean(data_x, training_ratio) # Shift(zero) the data to its mean. 
+    # eigVect_full, eigVal_full, eigVect, eigVal, data_y = PCA(data_x, PC_num, training_ratio) # PCA on training deformation matrix. 
+    eigVect_full, eigVal_full, eigVect, eigVal, _ = PCA(data_x_PCA, PC_num, training_ratio)
+    # orig_node_num = int(data_x.shape[0] / 3.0)
+    # data_x, nDOF, non_zero_indices_list = matrixShrink(data_x, fix_indices_list) # Remove zero rows of data_x.
+    # data_x, mean_vect = zeroMean(data_x, training_ratio) # Shift(zero) the data to its mean. 
+    # eigVect_full, eigVal_full, eigVect, eigVal, data_y = PCA(data_x, PC_num, training_ratio, bool_PC_norm=isPCNormOn) # PCA on training deformation matrix. 
+    
+    ############################################################################
+    # Use (pretrained) Autoencoder to generate latent embeddings. 
+    if FRAME_CODER_MODEL_TYPE == 'VAE':
+        # print(data_x[:,0])
+        vae_model = Model_VAE(data_x, batch_size=ML_VAE.BATCH_SIZE, learning_rate=ML_VAE.LEARNING_RATE, 
+                              num_epochs=ML_VAE.NUM_EPOCHS, loss_beta=ML_VAE.LOSS_BETA)
+        
+        # Save dataset repo dicts. 
+        np.save("train_set_ind_array.npy", vae_model.train_set_ind_array)
+        np.save("valid_set_ind_array.npy", vae_model.valid_set_ind_array)
+        np.save("test_set_ind_array.npy", vae_model.test_set_ind_array)
+        
+        scipy.io.savemat("input_data_repo_dict.mat", vae_model.dataset.input_data_repo_dict)
+        scipy.io.savemat("output_data_repo_dict.mat", vae_model.dataset.output_data_repo_dict)
+
+        vae_model.train() # Train the model. 
+        vae_model.loss_plot() # Plot Train & Valid Loss. 
+        
+        eval_dataset_obj = DeformationAutoencoderDataset(data_matrix=data_x) # Contains all data. 
+        eval_dataloader = set_dataloader(eval_dataset_obj, batch_size=1)
+        
+        (loss_list, groundtruths_list, generations_list, 
+         mu_list, logvar_list, latent_list) = vae_model.evaluate(vae_model.vae_net, eval_dataloader)
+        
+        np.save("loss_list.npy", loss_list)
+        np.save("groundtruths_list.npy", groundtruths_list)
+        np.save("generations_list.npy", generations_list)
+        np.save("mu_list.npy", mu_list)
+        np.save("logvar_list.npy", logvar_list)
+        np.save("latent_list.npy", latent_list)
+        
+        encoder_model = vae_model.vae_net
+        data_x = np.load("groundtruths_list.npy").reshape(-1,ML_VAE.INPUT_DIM).T # nDOF-9 * SampleNum. 
+        data_y = np.load("latent_list.npy").reshape(-1,ML_VAE.LATENT_DIM).T # PC_num * SampleNum.
+    
+    elif FRAME_CODER_MODEL_TYPE == 'AE':
+        ae_model = Model_AE(data_x, batch_size=ML_VAE.BATCH_SIZE, learning_rate=ML_VAE.LEARNING_RATE, 
+                            num_epochs=ML_VAE.NUM_EPOCHS, loss_beta=ML_VAE.LOSS_BETA)
+        
+        # Save dataset repo dicts. 
+        np.save("train_set_ind_array.npy", ae_model.train_set_ind_array)
+        np.save("valid_set_ind_array.npy", ae_model.valid_set_ind_array)
+        np.save("test_set_ind_array.npy", ae_model.test_set_ind_array)
+
+        scipy.io.savemat("input_data_repo_dict.mat", ae_model.dataset.input_data_repo_dict)
+        scipy.io.savemat("output_data_repo_dict.mat", ae_model.dataset.output_data_repo_dict)
+
+        ae_model.train() # Train the model. 
+        ae_model.loss_plot() # Plot Train & Valid Loss. 
+        
+        eval_dataset_obj = DeformationAutoencoderDataset(data_matrix=data_x) # Contains all data. Do not shuffle. 
+        eval_dataloader = set_dataloader(eval_dataset_obj, batch_size=1) # Do not shuffle. 
+        
+        (loss_list, groundtruths_list, 
+         generations_list, latent_list) = ae_model.evaluate(ae_model.autoencoder, eval_dataloader)
+        
+        np.save("loss_list.npy", loss_list)
+        np.save("groundtruths_list.npy", groundtruths_list)
+        np.save("generations_list.npy", generations_list)
+        np.save("latent_list.npy", latent_list)
+        
+        encoder_model = ae_model.autoencoder
+        data_x = np.load("groundtruths_list.npy").reshape(-1,ML_VAE.INPUT_DIM).T # nDOF-9 * SampleNum. 
+        data_y = np.load("latent_list.npy").reshape(-1,ML_VAE.LATENT_DIM).T # PC_num * SampleNum.
+    
+    elif FRAME_CODER_MODEL_TYPE == 'Pretrained':
+        encoder_model = torch.load(PRETRAINED_ENCODER_MODEL_PATH).to(device)
+        data_x = np.load(SAVED_GT_LIST).reshape(-1,ML_VAE.INPUT_DIM).T # nDOF-9 * SampleNum. 
+        data_y = np.load(SAVED_LATENT_LIST).reshape(-1,ML_VAE.LATENT_DIM).T # PC_num * SampleNum.
+    
+    else: raise ValueError("Autoencoder type not recognized. ")
+
+    ############################################################################
     
     # Generate FM indices (Founded best initial indices: 96, 217, 496, 523, 564, 584, 1063)
     v_space, _, _ = matrixShrink(v_space, fix_indices_list)
     if isKCenter:
         initial_pt_index = 474 # Initial point index for k-center clustering. Randomly assigned. Current best result: 584 (best mean_max_nodal_error: 0.92 mm)
-        k = 40 # The number of wanted centers (must be larger than the FM_num). Default: 20. 
+        k = 20 # The number of wanted centers (must be larger than the FM_num). Default: 20. 
         style = "mean" # Style of k-center clustering. "mean" or "last". 
         center_indices_list = greedyClustering(v_space, initial_pt_index, k, style)
         if center_indices_list != []: FM_indices = center_indices_list[0:FM_num]
@@ -1047,9 +1197,9 @@ def main():
     # Generate train/valid/test tensor dataloaders. 
     (train_dataloader, valid_dataloader, 
      test_dataloader, norm_params) = dataProcessing(data_x, data_y,
-                                                     batch_size, training_ratio, 
-                                                     validation_ratio, FM_indices, 
-                                                     bool_norm=isNormOn)
+                                                    batch_size, training_ratio, 
+                                                    validation_ratio, FM_indices, 
+                                                    bool_norm=isNormOn)
     
 
     # ********************************** TRAIN & VALID & TEST ********************************** #
@@ -1059,8 +1209,8 @@ def main():
     # Forward training & validation
     start_time = time.time()
     neural_net, lossList_train, lossList_valid = trainValidateNet(train_dataloader, valid_dataloader, 
-                                                                    neural_net, learning_rate, num_epochs, 
-                                                                    ANN_folder_path, device)
+                                                                  neural_net, learning_rate, num_epochs, 
+                                                                  ANN_folder_path, device)
     end_time = time.time()
     elapsed_time = end_time - start_time # Elapsed time for training. 
 
@@ -1077,7 +1227,8 @@ def main():
                                         transfer_data_mat["orig_config_var_name"][0], 
                                         original_node_number, loads_num, 
                                         os.path.join(transfer_data_mat["inp_folder"][0], 
-                                                     transfer_data_mat["results_folder_path_coor"][0]))
+                                                     transfer_data_mat["results_folder_path_coor"][0]),
+                                        deformation_scalar=deformation_scalar)
     (train_data, valid_data, test_data) = (data_matrix[:,:int(np.ceil(data_matrix.shape[1]*training_ratio))], 
                                            data_matrix[:,int(np.ceil(data_matrix.shape[1]*training_ratio)):int(np.ceil(data_matrix.shape[1]*(training_ratio+validation_ratio)))], 
                                            data_matrix[:,int(np.ceil(data_matrix.shape[1]*(training_ratio+validation_ratio))):]) # Calling out training, validation and testing deformation data. 
@@ -1085,8 +1236,11 @@ def main():
     test_reconstruct_list, mean_error_list, max_error_list = [], [], []
 
     for i in range(len(pred_y_List)):
-        data_reconstruct = dataReconstruction(eigVect, eigVal, pred_y_List[i], mean_vect, 
-                                              nDOF, non_zero_indices_list, bool_PC_norm=isPCNormOn) # Concatenated vector xyzxyz...; A transfer from training dataset (upon which the eigen-space is established) to testing dataset.
+        # data_reconstruct = dataReconstruction(eigVect, eigVal, pred_y_List[i], mean_vect, 
+        #                                       nDOF, non_zero_indices_list, bool_PC_norm=isPCNormOn) # Concatenated vector xyzxyz...; A transfer from training dataset (upon which the eigen-space is established) to testing dataset.
+        # For autoencoder-based reconstruction:
+        data_reconstruct = dataReconstruction_Autoencoder(encoder_model, pred_y_List[i], nDOF, non_zero_indices_list, device)
+        
         dist_vector_temp = (data_reconstruct.reshape(-1,3) - 
                             test_data[:,i].reshape(-1,1).reshape(-1,3)) # Convert into node-wise matrix. 
         node_pair_distance = []
@@ -1103,10 +1257,20 @@ def main():
     
     # Pure PCA for test samples
     test_data_shrinked, _, _ = matrixShrink(test_data, fix_indices_list)
-    if isPCNormOn: weights_test = np.transpose(eigVect/eigVal.reshape(-1,)) @ test_data_shrinked
-    else: weights_test = np.transpose(eigVect) @ test_data_shrinked
-    test_PCA_reconstruct = dataReconstruction(eigVect, eigVal, weights_test, mean_vect, 
-                                              nDOF, non_zero_indices_list, bool_PC_norm=isPCNormOn)
+    # if isPCNormOn: weights_test = np.transpose(eigVect/eigVal.reshape(-1,)) @ test_data_shrinked
+    # else: weights_test = np.transpose(eigVect) @ test_data_shrinked
+    # test_PCA_reconstruct = dataReconstruction(eigVect, eigVal, weights_test, mean_vect, 
+    #                                           nDOF, non_zero_indices_list, bool_PC_norm=isPCNormOn)
+    
+    ############################################################################
+    # Pure autoencoder for test samples.
+    weights_test = data_encoding_Autoencoder(encoder_model, test_data_shrinked, device)
+    for i in range(weights_test.shape[1]):
+        test_sample_temp = dataReconstruction_Autoencoder(encoder_model, weights_test[:,i], nDOF, non_zero_indices_list, device)
+
+        if i == 0: test_PCA_reconstruct = test_sample_temp.reshape(-1,1)
+        else: test_PCA_reconstruct = np.hstack((test_PCA_reconstruct, test_sample_temp.reshape(-1,1)))
+    ############################################################################
     
     dist_nodal_matrix_testPCA = np.zeros(shape=(int(test_data.shape[0]/3), len(pred_y_List)))
     mean_error_list_testPCA, max_error_list_testPCA = [], []
@@ -1130,7 +1294,71 @@ def main():
     max_mean = np.mean(max_nodal_error) # Compute the mean value of max errors. 
     mean_mean = np.mean(mean_nodal_error) # Compute the mean value of mean errors. 
 
+    ############################## PERFORMANCE EVALUATION ON TRAINING DATA SAMPLES #####################################
+    pred_y_List_train, test_y_List_train, _ = testNet(train_dataloader, neural_net, device)
+    dist_nodal_matrix_train = np.zeros(shape=(int(train_data.shape[0]/3), len(pred_y_List_train)))
+    train_reconstruct_list, mean_error_list, max_error_list = [], [], []
 
+    for i in range(len(pred_y_List_train)):
+        # data_reconstruct = dataReconstruction(eigVect, pred_y_List[i], mean_vect, 
+        #                                       nDOF, non_zero_indices_list) # Concatenated vector xyzxyz...; A transfer from training dataset (upon which the eigen-space is established) to testing dataset.
+        # For autoencoder-based reconstruction:
+        data_reconstruct = dataReconstruction_Autoencoder(encoder_model, pred_y_List_train[i], nDOF, non_zero_indices_list, device)
+        
+        dist_vector_temp = (data_reconstruct.reshape(-1,3) - # n_Nodes * 3 (x, y, z). 
+                            train_data[:,i].reshape(-1,1).reshape(-1,3)) # Convert into node-wise matrix. 
+        node_pair_distance = []
+
+        for j in range(dist_vector_temp.shape[0]): # Number of nodes
+            node_pair_distance.append(np.linalg.norm(dist_vector_temp[j,:]))
+        
+        mean_error_temp = np.sum(np.array(node_pair_distance).astype(float).reshape(-1,1)) / len(node_pair_distance)
+        max_error_temp = np.max(node_pair_distance)
+        dist_nodal_matrix_train[:,i] = np.array(node_pair_distance).astype(float).reshape(1,-1)
+        train_reconstruct_list.append(data_reconstruct)
+        mean_error_list.append(mean_error_temp)
+        max_error_list.append(max_error_temp)
+    
+    # Pure PCA for test samples
+    train_data_shrinked, _, _ = matrixShrink(train_data, fix_indices_list)
+    # weights_test = np.transpose(eigVect) @ test_data_shrinked
+    # test_PCA_reconstruct = dataReconstruction(eigVect, weights_test, mean_vect, 
+    #                                           nDOF, non_zero_indices_list)
+    
+    ############################################################################
+    # Pure autoencoder for test samples.
+    weights_train = data_encoding_Autoencoder(encoder_model, train_data_shrinked, device)
+    for i in range(weights_train.shape[1]):
+        train_sample_temp = dataReconstruction_Autoencoder(encoder_model, weights_train[:,i], nDOF, non_zero_indices_list, device)
+
+        if i == 0: train_PCA_reconstruct = train_sample_temp.reshape(-1,1)
+        else: train_PCA_reconstruct = np.hstack((train_PCA_reconstruct, train_sample_temp.reshape(-1,1)))
+    ############################################################################
+    
+    dist_nodal_matrix_trainPCA = np.zeros(shape=(int(train_data.shape[0]/3), len(pred_y_List_train)))
+    mean_error_list_trainPCA, max_error_list_trainPCA = [], []
+
+    for i in range(train_PCA_reconstruct.shape[1]):
+        dist_vector_temp = (train_PCA_reconstruct[:,i].reshape(-1,3) - 
+                            train_data[:,i].reshape(-1,1).reshape(-1,3))
+        node_pair_distance = []
+
+        for j in range(dist_vector_temp.shape[0]): # Number of nodes
+            node_pair_distance.append(np.linalg.norm(dist_vector_temp[j,:]))
+        
+        mean_error_temp = np.sum(np.array(node_pair_distance).astype(float).reshape(-1,1)) / len(node_pair_distance)
+        max_error_temp = np.max(node_pair_distance)
+        dist_nodal_matrix_trainPCA[:,i] = np.array(node_pair_distance).astype(float).reshape(1,-1)
+        mean_error_list_trainPCA.append(mean_error_temp)
+        max_error_list_trainPCA.append(max_error_temp)
+
+    max_nodal_error_train = 1e3*np.array(max_error_list).astype(float).reshape(-1,1) # Unit: mm. 
+    mean_nodal_error_train = 1e3*np.array(mean_error_list).astype(float).reshape(-1,1) # Unit: mm. 
+    # max_mean_train = np.mean(max_nodal_error_train) # Compute the mean value of max errors. 
+    # mean_mean_train = np.mean(mean_nodal_error_train) # Compute the mean value of mean errors.     
+    
+    ####################################################################################################################
+    
     # ********************************** PLOT & SAVE RESULTS ********************************** #
     # Plot logarithm of training loss w.r.t. iteration. 
     plt.figure(figsize=(20.0,12.8))
@@ -1150,30 +1378,46 @@ def main():
 
     # Save results to .mat files. 
     for i, vector in enumerate(test_reconstruct_list):
-        if i == 0: test_reconstruct_matrix = vector
-        else: test_reconstruct_matrix = np.concatenate((test_reconstruct_matrix, vector), axis=1)
+        if i == 0: test_reconstruct_matrix = vector.reshape(-1,1)
+        else: test_reconstruct_matrix = np.hstack((test_reconstruct_matrix, vector.reshape(-1,1)))
+        
+    for i, vector in enumerate(train_reconstruct_list):
+        if i == 0: train_reconstruct_matrix = vector.reshape(-1,1)
+        else: train_reconstruct_matrix = np.hstack((train_reconstruct_matrix, vector.reshape(-1,1)))
     
-    mdict = {"FM_num": FM_num, "PC_num": PC_num, "isPCNormOn": isPCNormOn, "batch_size": batch_size, # Numbers of FMs and principal components.
+    mdict = {"FM_num": FM_num, "PC_num": PC_num, "batch_size": batch_size, # Numbers of FMs and principal components.
              "ANN_folder_path": ANN_folder_path, # The path where the trained model files are saved. 
-             "train_data": train_data, "valid_data": valid_data, "test_data": test_data, # The three dataset used for the training, validation and testing. 
-             "pred_y_list": pred_y_List, # The list of predicted weight vectors of test dataset. 
-             "nonlinear_deformation_matrix": data_matrix, # Deformation data from nonlinear simulation results. 
-             "test_deformation_label": test_data, # Label deformation results. 
-             "test_deformation_reconstruct": test_reconstruct_matrix, # ANN reconstruction deformation results. 
-             "test_PCA_reconstruct": test_PCA_reconstruct, # Reconstruction of pure PCA decomposition. 
+             "train_data": train_data/deformation_scalar, "valid_data": valid_data/deformation_scalar, "test_data": test_data/deformation_scalar, # The three dataset used for the training, validation and testing. 
+             "pred_y_list": pred_y_List, # The list of predicted weight vectors of test dataset. In exact order. 
+             "test_y_List": test_y_List, # The list of ground truth weight vectors of test dataset. In exact order. 
+             "nonlinear_deformation_matrix": data_matrix/deformation_scalar, # Deformation data from nonlinear simulation results. 
+             "test_deformation_label": test_data/deformation_scalar, # Label deformation results. 
+             "test_deformation_reconstruct": test_reconstruct_matrix/deformation_scalar, # ANN reconstruction deformation results. 
+             "test_PCA_reconstruct": test_PCA_reconstruct/deformation_scalar, # Reconstruction of pure PCA decomposition. 
              "fix_node_list": fix_indices_list, # List of fixed node indices. Indexed from 1. 
              "FM_indices": np.array(FM_indices).astype(int).reshape(-1,1) + 1, # FMs" indices. Indexed from 1. 
              "center_indices": np.array(center_indices_list).astype(int).reshape(-1,1) + 1, # Center indices generated from the k-center clustering. Indexed from 1. 
-             "dist_nodal_matrix": 1e3*dist_nodal_matrix, # Distance between each nodal pair. Unit: mm
-             "mean_nodal_error": mean_nodal_error, # Mean nodal distance of each sample. Unit: mm
-             "max_nodal_error": max_nodal_error, # Max nodal distance of each sample. Unit: mm
+             "dist_nodal_matrix": 1e3*dist_nodal_matrix/deformation_scalar, # Distance between each nodal pair. Unit: mm
+             "mean_nodal_error": mean_nodal_error/deformation_scalar, # Mean nodal distance of each sample. Unit: mm
+             "max_nodal_error": max_nodal_error/deformation_scalar, # Max nodal distance of each sample. Unit: mm
              "eigVect_full": eigVect_full, "eigVal_full": eigVal_full, # Full eigenvector and eigenvalue matrices
              "eigVect": eigVect, "eigVal": eigVal, # Principal eigenvector and eigenvalue matrices
-             "mean_vect": mean_vect, # The mean vector of training dataset for data reconstruction
-             "dist_nodal_matrix_testPCA": 1e3*dist_nodal_matrix_testPCA, # Distance between each nodal pair (pure PCA reconstruction). Unit: mm
-             "mean_nodal_error_testPCA": 1e3*np.array(mean_error_list_testPCA).astype(float).reshape(-1,1), # Mean nodal distance of each sample (pure PCA reconstruction). Unit: mm
-             "max_nodal_error_testPCA": 1e3*np.array(max_error_list_testPCA).astype(float).reshape(-1,1), # Max nodal distance of each sample (pure PCA reconstruction). Unit: mm
-             "alpha_indexing_vector": transfer_data_mat["alpha_indexing_vector"] # The alphas for interpolated data. 
+             "mean_vect": mean_vect/deformation_scalar, # The mean vector of training dataset for data reconstruction. 
+             "dist_nodal_matrix_testPCA": 1e3*dist_nodal_matrix_testPCA/deformation_scalar, # Distance between each nodal pair (pure PCA reconstruction). Unit: mm
+             "mean_nodal_error_testPCA": 1e3*np.array(mean_error_list_testPCA).astype(float).reshape(-1,1)/deformation_scalar, # Mean nodal distance of each sample (pure PCA reconstruction). Unit: mm
+             "max_nodal_error_testPCA": 1e3*np.array(max_error_list_testPCA).astype(float).reshape(-1,1)/deformation_scalar, # Max nodal distance of each sample (pure PCA reconstruction). Unit: mm
+             "alpha_indexing_vector": transfer_data_mat["alpha_indexing_vector"], # The alphas for interpolated data. 
+             "pred_y_list_train": pred_y_List_train,
+             "test_y_List_train": test_y_List_train,
+             "dist_nodal_matrix_train": 1e3*dist_nodal_matrix_train/deformation_scalar,
+             "dist_nodal_matrix_trainPCA": 1e3*dist_nodal_matrix_trainPCA/deformation_scalar, # Distance between each nodal pair (pure PCA reconstruction). Unit: mm
+             "mean_nodal_error_trainPCA": 1e3*np.array(mean_error_list_trainPCA).astype(float).reshape(-1,1)/deformation_scalar, # Mean nodal distance of each sample (pure PCA reconstruction). Unit: mm
+             "max_nodal_error_trainPCA": 1e3*np.array(max_error_list_trainPCA).astype(float).reshape(-1,1)/deformation_scalar, # Max nodal distance of each sample (pure PCA reconstruction). Unit: mm
+             "train_deformation_label": train_data/deformation_scalar, # Label deformation results. 
+             "train_deformation_reconstruct": train_reconstruct_matrix/deformation_scalar, # ANN reconstruction deformation results. 
+             "train_PCA_reconstruct": train_PCA_reconstruct/deformation_scalar, # Reconstruction of pure PCA decomposition. 
+             "mean_nodal_error_train": mean_nodal_error_train/deformation_scalar, # Mean nodal distance of each sample. Unit: mm
+             "max_nodal_error_train": max_nodal_error_train/deformation_scalar # Max nodal distance of each sample. Unit: mm. 
              }
     scipy.io.savemat("ANN_benchmark_results.mat", mdict) # Run visualization on Matlab. 
 
