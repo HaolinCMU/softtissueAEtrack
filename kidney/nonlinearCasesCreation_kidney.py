@@ -16,7 +16,7 @@ import scipy.io # For extracting data from .mat file
 
 class inputFileGenerator(object):
     """
-    Generate input file for Abaqus. 
+    Generate input file for ansys. 
 
     Unit system: 
         Length: m
@@ -65,7 +65,7 @@ class inputFileGenerator(object):
         self._inputFile_lines_total = []
         self.writePath = write_path
 
-        self._modulus = 1e7 # Young's modulus. Unit: Pa. Default: 1e7. 
+        self._modulus = 180e3 # Young's modulus. Unit: Pa. Default: 1e7. 
         self._poisson_ratio = 0.48 # Poisson's ratio. Linear elastic default: 0.3; neo-Hookean default: 0.48.  
 
         self._isCoupleOn = False # Boolean. True: use coupling constraint; False: do not use coupling constraint. Must not turn on if applying Laplacian smoothing.  
@@ -79,8 +79,8 @@ class inputFileGenerator(object):
         self._smoothing_rate = 0.1 # Default: 0.1 (Previous: 1e-4). 
 
         self.loads_num = 3 # For initial testing.
-        self._load_sampling_style = "gaussian" # String. Indicating the type of random sampling for force components. "uniform" / "gaussian". 
-        self._load_scale = (0.0, 10.0) # Absolute range of the force for uniform sampling. Case and BC specific. (min, max). Unit: N.
+        self._load_sampling_style = "uniform" # String. Indicating the type of random sampling for force components. "uniform" / "gaussian". 
+        self._load_scale = (0.0, 5.0) # Absolute range of the force for uniform sampling. Case and BC specific. (min, max). Unit: N.
         self._gaussian_params = (12.0, 2.4) # Mean and deviation of the force for Gaussian sampling. Case and BC specific. (mean, deviation). Unit: N.
         self._load_params_tuple = None
         self._initial_force_component_vector = [] # List of floats. Default: []. Example: [5., 5., 5.]. 
@@ -572,7 +572,9 @@ class inputFileGenerator(object):
             for i in range(loads_num):
                 while(True):
                     load_posi_index_temp = random.choice(self._outer_surface_nodes_list) # Randomly chosen an outer surface node to apply load F(x, y, z). Indexed from 1. 
-                    if load_posi_index_temp not in fix_indices_list: break # The randomly generated index cannot be one of the fixed nodes. 
+                    if (load_posi_index_temp not in fix_indices_list and 
+                        load_posi_index_temp not in loads_posi_indices_list): 
+                            break # The randomly generated index cannot be one of the fixed nodes. 
                 
                 loads_posi_indices_list.append(load_posi_index_temp)
 
@@ -580,7 +582,7 @@ class inputFileGenerator(object):
         
         elif style == "fix": return input_posi_indices_list
 
-        else: return self._generateLoadPositions(loads_num, fix_indices_list)
+        else: raise ValueError("Invalid load generation style. ")
     
 
     def _generateLoadValues(self, output_dimension, load_scale, sampling_style="uniform"):
@@ -679,16 +681,31 @@ class inputFileGenerator(object):
                 
                 if self._initial_force_component_vector == []:
                     for load_posi_index_temp in self._loads_posi_indices_list:
-                        force_vector_temp[(load_posi_index_temp-1)*3:load_posi_index_temp*3,:] = self._generateLoadValues((3,1), self._load_params_tuple, 
-                                                                                                                        sampling_style=self._load_sampling_style)
+                        start_ind: int = int(load_posi_index_temp * 3)
+                        force_vector_temp[start_ind-3:start_ind,:] = (
+                            self._generateLoadValues(
+                                (3,1), self._load_params_tuple, 
+                                sampling_style=self._load_sampling_style
+                            )
+                        ) # Initialize the original point forces, with xyz -- 3 directional components. `force_vector_temp` would eventually be a big column vector with all force components located on the surface. 
                 else: 
                     for load_posi_index_temp in self._loads_posi_indices_list:
-                        force_vector_temp[(load_posi_index_temp-1)*3:load_posi_index_temp*3,:] = np.array(self._initial_force_component_vector).astype(float).reshape(3,1)
+                        start_ind: int = int(load_posi_index_temp * 3)
+                        force_vector_temp[start_ind-3:start_ind,:] = np.array(
+                            self._initial_force_component_vector
+                        ).astype(float).reshape(3,1)
                 
+                self._force_vector_pointload = copy.deepcopy(force_vector_temp)
                 laplacian_matrix, mass_matrix = self.data_mat[self._laplacian_variable_name], self.data_mat[self._massMatrix_variable_name]
 
-                force_vector_new = self._laplacianSmoothing(force_vector_temp, laplacian_matrix, mass_matrix, iter_num=self._laplacian_iter_num, 
-                                                            smoothing_rate=self._smoothing_rate, laplacian_force_field=self._user_prescribed_force_field) # Size: (nSurfI x 3)*1. Fix force value: initial_BC_state="fix" (not recommended). 
+                force_vector_new = self._laplacianSmoothing(
+                    force_vector_temp, 
+                    laplacian_matrix, 
+                    mass_matrix, 
+                    iter_num=self._laplacian_iter_num, 
+                    smoothing_rate=self._smoothing_rate, 
+                    laplacian_force_field=self._user_prescribed_force_field
+                ) # Size: (nSurfI x 3)*1. Fix force value: initial_BC_state="fix" (not recommended). 
 
                 self._laplacian_force_field = force_vector_new.reshape(-1,3)
 
@@ -909,8 +926,7 @@ class inputFileGenerator(object):
 
                 if initial_BC_state == "fix":
                     for j, value in enumerate(force_vector):
-                        if value != 0:
-                            force_vector_new[j] = value
+                        if value != 0: force_vector_new[j] = value
 
         else: force_vector_new = np.array(laplacian_force_field).astype(float).reshape(len(laplacian_force_field),1)
 
@@ -1145,9 +1161,9 @@ def saveLog(file_name_list, elapsed_time_list, write_status, data_file_name,
 
 
 def main():
-    abaqus_default_directory = "C:/temp" # Default working directory of Abaqus. 
+    ansys_default_directory = "C:/temp" # Default working directory of ansys. 
     inp_folder = "inp_files"
-    sample_nums = 2000 # Default: 2000. 
+    sample_nums = 1 # Default: 2000. 
     data_file_path = "data_kidney.mat"
     node_variable_name, elem_variable_name = "NodeI", "EleI"
     results_folder_path_stress, results_folder_path_coor = "stress", "coor"
@@ -1157,7 +1173,7 @@ def main():
 
     # ================================== Force interpolation related variables ================================== #
     force_field_mat_name = "force_field_data.mat"
-    force_interpolation_folder = "inp_interpolation"
+    force_interpolation_folder = "inp_files"
     isPrescribedForceOn = False # Boolean indicator. True: use prescribed force field; False: no specified force field. Default: False. 
     force_type = "random" # String. The type of prescribed force field. "interpolated": interpolated force fields; "random": weighted-summed force fields. 
     eigen_num_force, force_scalar = 100, 2.0 # Float. The scalar of force fields controlling the force magnitude -> deformation magnitude of the tumor in nonlinear solver. Unit: N. 
@@ -1179,7 +1195,7 @@ def main():
         sample_nums = force_fields.shape[1]
 
 
-    # Generate input file for Abaqus. 
+    # Generate input file for ansys. 
     file_name_list, elapsed_time_list, force_field_matrix = [], [], None
 
     for i in range(sample_nums):
@@ -1188,8 +1204,10 @@ def main():
         if isPrescribedForceOn:
             if not os.path.isdir(force_interpolation_folder): os.mkdir(force_interpolation_folder)
 
-            file_name_temp = ("{}_interpolated.inp".format(str(i+20001)) if force_type == "interpolated" else
-                              "{}_random.inp".format(str(i+20001)))
+            file_name_temp = (
+                f"{i+1:05d}_interpolated.inp" if force_type == "interpolated" 
+                else f"{i+1:05d}_random.inp"
+            )
             write_path = os.path.join(force_interpolation_folder, file_name_temp)
 
             force_field_prescribed_list = list(force_fields[:,i])
@@ -1201,7 +1219,7 @@ def main():
         else: 
             if not os.path.isdir(inp_folder): os.mkdir(inp_folder)
 
-            file_name_temp = "{}.inp".format(str(i+20001))
+            file_name_temp = f"{i+1:05d}.inp"
             write_path = os.path.join(inp_folder, file_name_temp)
 
             inputFile_temp = inputFileGenerator(data_file_path, write_path, material_type, 
@@ -1214,8 +1232,13 @@ def main():
         file_name_list.append(file_name_temp)
         elapsed_time_list.append(elapsed_time)
 
-        if i == 0: force_field_matrix = inputFile_temp._laplacian_force_field.reshape(-1,1)
-        else: force_field_matrix = np.hstack((force_field_matrix, inputFile_temp._laplacian_force_field.reshape(-1,1)))
+        if i == 0: 
+            force_field_matrix = inputFile_temp._laplacian_force_field.reshape(-1,1)
+            force_field_pointload = inputFile_temp._force_vector_pointload.reshape(-1,1)
+        else: 
+            force_field_matrix = np.hstack((force_field_matrix, inputFile_temp._laplacian_force_field.reshape(-1,1)))
+            force_field_pointload = np.hstack((force_field_pointload, inputFile_temp._force_vector_pointload.reshape(-1,1)))
+            
 
         # ============================ For force visualization only (sample_nums = 1) ============================ # 
         # print(inputFile_temp._laplacian_initial_loads_posi)
@@ -1245,17 +1268,19 @@ def main():
              "results_folder_path_coor": results_folder_path_coor,
              "original_node_number": inputFile_temp._orig_node_num,
              "couple_region_num": inputFile_temp._couple_region_num,
+             "force_field_pointload": force_field_pointload, 
              "force_field_matrix": force_field_matrix, # The force field matrix of all generated samples. Size: nSurfI*3 x sampleNum_total. 
-             "weight_matrix": weight_matrix, "force_scalar_coeff": force_scalar, # The randomly generated matrix for force fields' reconstruction. Size: eigen_num x (3*sample_num). 
+             "weight_matrix": weight_matrix, 
+             "force_scalar_coeff": force_scalar, # The randomly generated matrix for force fields' reconstruction. Size: eigen_num x (3*sample_num). 
              "eigen_number_force": eigen_num_force, # Int. The eigenmode number of force field reconstruction. (Used only in force field interpolation)
              "alpha_indexing_vector": np.zeros(shape=(sample_nums, 1)) if not isPrescribedForceOn else scipy.io.loadmat(force_field_mat_name)["alpha_indexing_vector"]
             }
 
     scipy.io.savemat("training_parameters_transfer.mat", mdict)
     
-    # np.save(os.path.join(abaqus_default_directory, "training_parameters_transfer.npy"), mdict, fix_imports=True)
+    # np.save(os.path.join(ansys_default_directory, "training_parameters_transfer.npy"), mdict, fix_imports=True)
 
-    # np.savez(os.path.join(abaqus_default_directory, "training_parameters_transfer.npz"), 
+    # np.savez(os.path.join(ansys_default_directory, "training_parameters_transfer.npz"), 
     #          fix_indices_list=fix_indices_list,
     #          orig_data_file_name=data_file_path,
     #          orig_config_var_name=node_variable_name,
